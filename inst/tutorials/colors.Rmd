@@ -1,0 +1,406 @@
+---
+title: "Color and Shape Chooser"
+output: learnr::tutorial
+runtime: shiny_prerendered
+tutorial: true
+author: "Boaz Rosenberg"
+---
+
+```{r setup, include=FALSE}
+library(learnr)
+library(shiny)
+library(colourpicker)
+library(ggplot2)
+library(shinyjs)
+library(RColorBrewer)
+library(viridis)
+
+# Initial state
+init_colors <- c("#FFFFFF", "#FFFFFF", "#FFFFFF")
+
+# Function to get black/white contrast for labels
+get_contrast_color <- function(hex) {
+  if (is.na(hex) || hex == "" || !grepl("^#", hex)) return("black")
+  rgb <- col2rgb(hex)
+  lum <- (0.299 * rgb[1] + 0.587 * rgb[2] + 0.114 * rgb[3]) / 255
+  if (lum > 0.5) "black" else "white"
+}
+
+# Mapping names correctly to R's internal palette engines
+# Distinct / Qualitative
+qual_cb_safe <- c("Okabe-Ito", "Tableau 10", "Colorblind Safe", "Dark 2", "Set 2", "Paired", "Tol")
+qual_all     <- c(qual_cb_safe, "Set 1", "Set 3", "Pastel 1", "Pastel 2", "Accent", "Dark 3")
+
+# Sequential / Gradient
+seq_cb_safe  <- c("Viridis", "Magma", "Inferno", "Plasma", "Cividis", "Rocket", "Mako", "Blues", "Purples")
+seq_all      <- c(seq_cb_safe, "Reds", "Greens", "YlOrRd", "Heat", "Terrain")
+```
+
+```{css, echo=FALSE}
+/* Workspace Styling */
+.palette-container {
+  display: flex;
+  gap: 15px;
+  margin-top: 15px;
+  flex-wrap: wrap;
+  padding: 10px;
+}
+
+.color-box {
+  width: 135px;
+  height: 135px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #ccc;
+  border-radius: 12px;
+  cursor: pointer;
+  position: relative;
+  transition: transform 0.2s ease-out;
+  background-color: #fff;
+}
+
+.color-box.selected {
+  transform: translateY(-15px);
+  border: 4px solid #000 !important;
+  z-index: 10;
+  box-shadow: none !important;
+}
+
+.hex-label {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  font-weight: 800;
+  font-size: 19px;
+  letter-spacing: 0.5px;
+  pointer-events: none;
+}
+
+.mini-box {
+  width: 38px;
+  height: 38px;
+  border: 1px solid #999;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-block;
+  margin: 4px;
+}
+
+.mini-box.active { border: 3px solid #000; box-shadow: none; }
+
+.export-code {
+  background: #f8f9fa;
+  padding: 12px;
+  border-radius: 6px;
+  border: 1px solid #ddd;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 0.85em;
+  margin-top: 10px;
+}
+
+.creator-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 20px;
+  padding: 10px;
+  background: #fdfdfd;
+  border-radius: 8px;
+  border: 1px solid #eee;
+}
+
+.section-title { font-weight: 700; margin-top: 15px; display: block; color: #333; }
+```
+
+```{r ui, echo=FALSE}
+useShinyjs(rmd = TRUE)
+
+tabsetPanel(
+  id = "main_tabs",
+  
+  # --- TAB: SELECT COLORS ---
+  tabPanel(
+    "Select Colors",
+    fluidRow(
+      column(4,
+        wellPanel(
+          h4("Edit Workspace"),
+          colourpicker::colourInput("col_picker", "Adjust Selected", "#FFFFFF"),
+          hr(),
+          actionButton("add_btn", "Add Square", icon = icon("plus"), class = "btn-success"),
+          actionButton("del_btn", "Remove Square", icon = icon("trash"), class = "btn-danger"),
+          hr(),
+          p(strong("Current Workspace Vector:")),
+          verbatimTextOutput("palette_code")
+        )
+      ),
+      column(8,
+        h4("Current Workspace"),
+        uiOutput("palette_ui")
+      )
+    )
+  ),
+
+  # --- TAB: CREATE PALETTE ---
+  tabPanel(
+    "Create Palette",
+    fluidRow(
+      column(12,
+        wellPanel(
+          h4("Visual Gradient Builder"),
+          p("Define your three anchors below. The palette will blend smoothly between them."),
+          div(class = "creator-row",
+            div(style="flex:1", colourpicker::colourInput("pivot_left", "Left Anchor", "#2C3E50")),
+            div(style="flex:2", sliderInput("steps_lm", "Steps Between", min = 0, max = 15, value = 3)),
+            div(style="flex:1", colourpicker::colourInput("pivot_mid", "Middle Anchor", "#E74C3C")),
+            div(style="flex:2", sliderInput("steps_mr", "Steps Between", min = 0, max = 15, value = 3)),
+            div(style="flex:1", colourpicker::colourInput("pivot_right", "Right Anchor", "#F1C40F"))
+          ),
+          actionButton("apply_create", "Import to Workspace", class = "btn-primary", width = "100%")
+        )
+      )
+    ),
+    fluidRow(
+      column(12,
+        h4("Preview Result"),
+        plotOutput("create_preview_plot", height = "150px"),
+        verbatimTextOutput("create_export_code")
+      )
+    )
+  ),
+  
+  # --- TAB: BUILT-IN PALETTES ---
+  tabPanel(
+    "Built-in Palettes",
+    fluidRow(
+      column(4,
+        wellPanel(
+          h4("Library Explorer"),
+          selectInput("gen_type", "Palette Style", 
+                      choices = c("Distinct (Categorical)" = "qual", "Sequential (Gradient)" = "seq")),
+          sliderInput("gen_n", "Total Colors", min = 2, max = 25, value = 8),
+          checkboxInput("gen_cb", "Only Colorblind Safe", value = TRUE),
+          uiOutput("gen_name_ui"),
+          hr(),
+          actionButton("apply_gen", "Import to Workspace", class = "btn-primary", width = "100%"),
+          hr(),
+          p(strong("Usage Code:")),
+          uiOutput("gen_export_ui")
+        )
+      ),
+      column(8,
+        h4("Library Preview"),
+        plotOutput("gen_plot", height = "350px")
+      )
+    )
+  ),
+
+  # --- TAB: SHAPES ---
+  tabPanel(
+    "Shapes",
+    fluidRow(
+      column(7,
+        h4("Shape Library (PCH)"),
+        plotOutput("shape_grid", click = "grid_click", height = "450px")
+      ),
+      column(5,
+        div(class = "preview-card",
+          h4("Shape Preview"),
+          plotOutput("shape_preview", height = "220px"),
+          hr(),
+          span(class="section-title", "Apply Border Color:"),
+          uiOutput("color_selector_ui"),
+          uiOutput("fill_selector_ui")
+        )
+      )
+    )
+  )
+)
+```
+
+```{r server, context="server"}
+rv <- reactiveValues(
+  palette = init_colors,
+  selected_idx = 1,
+  selected_shape = 21,
+  preview_color = "#000000",
+  preview_fill = "#FFFFFF"
+)
+
+# --- SELECT COLORS ---
+output$palette_ui <- renderUI({
+  tags$div(class = "palette-container",
+    lapply(seq_along(rv$palette), function(i) {
+      is_sel <- if(rv$selected_idx == i) "selected" else ""
+      txt_col <- get_contrast_color(rv$palette[i])
+      tags$div(
+        class = paste("color-box", is_sel),
+        style = paste0("background-color:", rv$palette[i], ";"),
+        onclick = sprintf("Shiny.setInputValue('box_clicked', %d, {priority: 'event'})", i),
+        tags$span(class = "hex-label", style = paste0("color:", txt_col, ";"), rv$palette[i])
+      )
+    })
+  )
+})
+
+observeEvent(input$box_clicked, {
+  rv$selected_idx <- input$box_clicked
+  colourpicker::updateColourInput(session, "col_picker", value = rv$palette[rv$selected_idx])
+})
+
+observeEvent(input$col_picker, {
+  req(rv$selected_idx)
+  rv$palette[rv$selected_idx] <- input$col_picker
+})
+
+observeEvent(input$add_btn, {
+  rv$palette <- c(rv$palette, "#FFFFFF")
+  rv$selected_idx <- length(rv$palette)
+})
+
+observeEvent(input$del_btn, {
+  if(length(rv$palette) > 1) {
+    rv$palette <- rv$palette[-rv$selected_idx]
+    rv$selected_idx <- min(rv$selected_idx, length(rv$palette))
+  }
+})
+
+output$palette_code <- renderText({
+  paste0("c('", paste(rv$palette, collapse = "', '"), "')")
+})
+
+# --- CREATE PALETTE ---
+created_pal <- reactive({
+  p1 <- colorRampPalette(c(input$pivot_left, input$pivot_mid))(input$steps_lm + 2)
+  p2 <- colorRampPalette(c(input$pivot_mid, input$pivot_right))(input$steps_mr + 2)
+  # Remove duplicate middle color
+  unique(c(p1, p2))
+})
+
+output$create_preview_plot <- renderPlot({
+  pal <- created_pal()
+  ggplot(data.frame(x=1:length(pal), y=1), aes(x, y, fill=factor(x))) +
+    geom_tile() + scale_fill_manual(values=pal) + theme_void() + theme(legend.position="none")
+})
+
+output$create_export_code <- renderText({
+  paste0("c('", paste(created_pal(), collapse = "', '"), "')")
+})
+
+observeEvent(input$apply_create, {
+  rv$palette <- created_pal()
+  rv$selected_idx <- 1
+  updateTabsetPanel(session, "main_tabs", selected = "Select Colors")
+})
+
+# --- BUILT-IN PALETTES ---
+output$gen_name_ui <- renderUI({
+  if(input$gen_type == "seq") {
+    choices <- if(input$gen_cb) seq_cb_safe else seq_all
+  } else {
+    choices <- if(input$gen_cb) qual_cb_safe else qual_all
+  }
+  selectInput("gen_name", "Select Theme", choices = choices)
+})
+
+generated_pal <- reactive({
+  n <- input$gen_n
+  name <- input$gen_name
+  req(name)
+  
+  # 1. Handle Viridis (External package)
+  if (name %in% c("Viridis", "Magma", "Inferno", "Plasma", "Cividis", "Rocket", "Mako")) {
+    return(viridis::viridis(n, option = tolower(name)))
+  } 
+  
+  # 2. Handle palette.colors (Strict internal distinct palettes)
+  # Map user-friendly names to internal R keys
+  internal_name <- switch(name,
+    "Okabe-Ito" = "Okabe-Ito",
+    "Tableau 10" = "Tableau 10",
+    "Colorblind Safe" = "Colorblind",
+    "Tol" = "Tol",
+    name # Fallback
+  )
+  
+  # Check if it's available in palette.colors
+  if (internal_name %in% palette.pals()) {
+    pal <- palette.colors(palette = internal_name)
+    if(n > length(pal)) return(colorRampPalette(pal)(n))
+    return(as.character(pal[1:n]))
+  }
+  
+  # 3. Handle hcl.colors (Internal sequential/diverging and brewer)
+  # Map user-friendly names to HCL keys
+  hcl_name <- switch(name,
+    "Dark 2" = "Dark 2",
+    "Set 2"  = "Set 2",
+    "Paired" = "Paired",
+    name
+  )
+  
+  return(hcl.colors(n, hcl_name))
+})
+
+output$gen_plot <- renderPlot({
+  pal <- generated_pal()
+  ggplot(data.frame(x=1:length(pal), y=1), aes(x, y, fill=factor(x))) +
+    geom_tile() + scale_fill_manual(values=pal) + theme_void() + theme(legend.position="none")
+})
+
+output$gen_export_ui <- renderUI({
+  tags$div(class="export-code", 
+           sprintf("scale_fill_manual(values = c('%s'))", paste(generated_pal(), collapse="', '")))
+})
+
+observeEvent(input$apply_gen, {
+  rv$palette <- generated_pal()
+  rv$selected_idx <- 1
+  updateTabsetPanel(session, "main_tabs", selected = "Select Colors")
+})
+
+# --- SHAPES ---
+shape_df <- data.frame(pch = 0:25, x = rep(0:5, length.out = 26), y = rep(4:0, each = 6, length.out = 26))
+
+output$shape_grid <- renderPlot({
+  ggplot(shape_df, aes(x, y)) +
+    geom_tile(data = subset(shape_df, pch == rv$selected_shape), fill = "#000", alpha = 0.1, width = 0.9, height = 0.9) +
+    geom_point(aes(shape = pch), size = 10, fill = "gray80") +
+    geom_text(aes(label = pch), vjust = 2.8, size = 6, fontface = "bold") +
+    scale_shape_identity() + theme_void() + coord_cartesian(clip = "off")
+})
+
+observeEvent(input$grid_click, {
+  clicked <- nearPoints(shape_df, input$grid_click, threshold = 25, maxpoints = 1)
+  if (nrow(clicked) > 0) rv$selected_shape <- clicked$pch
+})
+
+output$color_selector_ui <- renderUI({
+  lapply(seq_along(rv$palette), function(i) {
+    is_active <- if(rv$preview_color == rv$palette[i]) "active" else ""
+    tags$div(class = paste("mini-box", is_active), style = paste0("background-color:", rv$palette[i], ";"),
+             onclick = sprintf("Shiny.setInputValue('sel_border_hex', '%s')", rv$palette[i]))
+  })
+})
+
+output$fill_selector_ui <- renderUI({
+  if(rv$selected_shape >= 21 && rv$selected_shape <= 25) {
+    tagList(span(class="section-title", "Apply Fill Color:"),
+      lapply(seq_along(rv$palette), function(i) {
+        is_active <- if(rv$preview_fill == rv$palette[i]) "active" else ""
+        tags$div(class = paste("mini-box", is_active), style = paste0("background-color:", rv$palette[i], ";"),
+                 onclick = sprintf("Shiny.setInputValue('sel_fill_hex', '%s')", rv$palette[i]))
+      }))
+  }
+})
+
+observeEvent(input$sel_border_hex, { rv$preview_color <- input$sel_border_hex })
+observeEvent(input$sel_fill_hex, { rv$preview_fill <- input$sel_fill_hex })
+
+output$shape_preview <- renderPlot({
+  ggplot(data.frame(x=1,y=1), aes(x,y)) +
+    geom_point(shape = rv$selected_shape, size = 45, color = rv$preview_color, fill = rv$preview_fill, stroke = 4) +
+    theme_void() + labs(title = paste("PCH", rv$selected_shape)) +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 22))
+})
+```
