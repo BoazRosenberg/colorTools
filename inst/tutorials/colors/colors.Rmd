@@ -1,5 +1,7 @@
 ---
-title: "Color and Shape Chooser"
+title: "Color Tools"
+description: "An interactive tool for exploring and selecting colors and shapes."
+
 output: learnr::tutorial
 runtime: shiny_prerendered
 tutorial: true

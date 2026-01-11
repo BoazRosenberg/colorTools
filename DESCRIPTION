@@ -1,9 +1,9 @@
-Package: colorPicker
+Package: colorTools
 Type: Package
-Title: LearnR Color and Shape Tutorial
+Title: Interactive Tools for Exploring Color and Shape
 Version: 0.1.0
 Authors@R: person("Boaz", "Rosenberg", email = "boazrsnbrg@gmail.com", role = c("aut","cre"))
-Description: A color and shape selection tool.
+Description: Provides interactive tools for exploring color and shape combinations in R, using learnr platform for integration in Rstudio.
 License: MIT
 Encoding: UTF-8
 LazyData: true
